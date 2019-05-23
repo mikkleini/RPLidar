@@ -236,7 +236,7 @@ class RPLidar(object):
         '''
         if self._serial.inWaiting() > 0:
             return ('Data in buffer, you can\'t have info ! '
-                    'Run clean_input() to emptied the buffer.')
+                    'Run clean_input() to empty the buffer.', '', '', '')
         self._send_cmd(GET_INFO_BYTE)
         dsize, is_single, dtype = self._read_descriptor()
         if dsize != INFO_LEN:
@@ -273,7 +273,7 @@ class RPLidar(object):
         '''
         if self._serial.inWaiting() > 0:
             return ('Data in buffer, you can\'t have info ! '
-                    'Run clean_input() to emptied the buffer.')
+                    'Run clean_input() to empty the buffer.', 0)
         self.logger.info('Asking for health')
         self._send_cmd(GET_HEALTH_BYTE)
         dsize, is_single, dtype = self._read_descriptor()
