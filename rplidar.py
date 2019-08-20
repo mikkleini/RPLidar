@@ -106,7 +106,7 @@ def _process_express_scan(data, new_angle, trame):
 class RPLidar(object):
     '''Class for communicating with RPLidar rangefinder scanners'''
 
-    def __init__(self, port, baudrate=115200, timeout=1, logger=None):
+    def __init__(self, port, baudrate=115200, timeout=1, logger=None, offset_angle=0.0):
         '''Initilize RPLidar object for communicating with the sensor.
 
         Parameters
@@ -119,6 +119,8 @@ class RPLidar(object):
             Serial port connection timeout in seconds (the default is 1)
         logger : logging.Logger instance, optional
             Logger instance, if none is provided new instance is created
+        offset_angle : float
+            Lidar angular offset in degrees
         '''
         self._serial = None
         self.port = port
@@ -132,6 +134,7 @@ class RPLidar(object):
         if logger is None:
             logger = logging.getLogger('rplidar')
         self.logger = logger
+        self.offset_angle = offset_angle
         self.connect()
 
     def connect(self):
@@ -208,14 +211,27 @@ class RPLidar(object):
 
     def _read_descriptor(self):
         '''Reads descriptor packet'''
-        descriptor = self._serial.read(DESCRIPTOR_LEN)
-        self.logger.debug('Received descriptor: %s', _showhex(descriptor))
-        if len(descriptor) != DESCRIPTOR_LEN:
-            raise RPLidarException('Descriptor length mismatch')
-        elif not descriptor.startswith(SYNC_BYTE + SYNC_BYTE2):
-            raise RPLidarException('Incorrect descriptor starting bytes')
-        is_single = _b2i(descriptor[-2]) == 0
-        return _b2i(descriptor[2]), is_single, _b2i(descriptor[-1])
+        queue = bytearray()
+        while True:
+            
+            # Try to receive as many bytes as are missing from complete packet
+            missing_bytes = DESCRIPTOR_LEN - len(queue)
+            data = self._serial.read(missing_bytes)
+
+            # If didn't get expected amount of bytes then it's a timeout
+            if len(data) != missing_bytes:
+                raise RPLidarException('Response descriptor packet timed out')
+
+            # Add bytes to the queue and check if we have complete descriptor
+            queue += data
+            while len(queue) >= DESCRIPTOR_LEN:
+                if queue.startswith(SYNC_BYTE + SYNC_BYTE2):
+                    # Seems like we got our descriptor
+                    # TODO Should consider with lengths above 255 ?
+                    return (_b2i(queue[2]), _b2i(queue[5]) == 0, _b2i(queue[6]))
+                else:
+                    # Pop first byte and check for sync bytes again
+                    del queue[0]
 
     def _read_response(self, dsize):
         '''Reads response packet with length of `dsize` bytes'''
@@ -234,9 +250,6 @@ class RPLidar(object):
         dict
             Dictionary with the sensor information
         '''
-        if self._serial.inWaiting() > 0:
-            return ('Data in buffer, you can\'t have info ! '
-                    'Run clean_input() to empty the buffer.', '', '', '')
         self._send_cmd(GET_INFO_BYTE)
         dsize, is_single, dtype = self._read_descriptor()
         if dsize != INFO_LEN:
@@ -271,9 +284,6 @@ class RPLidar(object):
         error_code : int
             The related error code that caused a warning/error.
         '''
-        if self._serial.inWaiting() > 0:
-            return ('Data in buffer, you can\'t have info ! '
-                    'Run clean_input() to empty the buffer.', 0)
         self.logger.info('Asking for health')
         self._send_cmd(GET_HEALTH_BYTE)
         dsize, is_single, dtype = self._read_descriptor()
@@ -331,7 +341,7 @@ class RPLidar(object):
                                 'Error code: %d', error_code)
 
         cmd = _SCAN_TYPE[scan_type]['byte']
-        self.logger.info('starting scan process in %s mode' % scan_type)
+        self.logger.info('Starting scan process in %s mode' % scan_type)
 
         if scan_type == 'express':
             self._send_payload_cmd(cmd, b'\x00\x00\x00\x00\x00')
@@ -449,7 +459,7 @@ class RPLidar(object):
                     yield scan_list
                 scan_list = []
             if distance > 0:
-                scan_list.append((quality, angle, distance))
+                scan_list.append((quality, angle + self.offset_angle, distance))
 
 
 class ExpressPacket(namedtuple('express_packet',
